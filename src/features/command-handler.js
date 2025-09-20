@@ -23,7 +23,6 @@ class CommandHandler {
         key.name !== "backspace" &&
         key.name !== "tab"
       ) {
-        // debugLog.log("Inserting character:", ch);
         this.editor.insertChar(ch);
       }
     });
@@ -33,8 +32,22 @@ class CommandHandler {
     screen.key(["down"], () => this.editor.moveCursor("down"));
     screen.key(["left"], () => this.editor.moveCursor("left"));
     screen.key(["right"], () => this.editor.moveCursor("right"));
-    screen.key(["home"], () => this.editor.moveCursor("home"));
-    screen.key(["end"], () => this.editor.moveCursor("end"));
+    screen.key(["home", "M-home"], (ch, key) => {
+      if (key.meta) {
+        if (!this.editor.selection.active) this.editor.selection.start();
+        this.editor.moveCursor("home", true);
+      } else {
+        this.editor.moveCursor("home");
+      }
+    });
+    screen.key(["end", "M-end"], (ch, key) => {
+      if (key.meta) {
+        if (!this.editor.selection.active) this.editor.selection.start();
+        this.editor.moveCursor("end", true);
+      } else {
+        this.editor.moveCursor("end");
+      }
+    });
     screen.key(["pageup"], () => this.editor.moveCursor("pageup"));
     screen.key(["pagedown"], () => this.editor.moveCursor("pagedown"));
 

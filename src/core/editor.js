@@ -85,17 +85,21 @@ class TextEditor {
   }
 
   swapLines(direction) {
-    console.log("swapLines", direction);
-    if (direction === "up") {
+    if (direction === "up" && this.cursor.row > 0) {
+      const temp = this.buffer.lines[this.cursor.row];
       this.buffer.lines[this.cursor.row] =
         this.buffer.lines[this.cursor.row - 1];
-      this.buffer.lines[this.cursor.row - 1] =
-        this.buffer.lines[this.cursor.row];
-    } else {
+      this.buffer.lines[this.cursor.row - 1] = temp;
+      this.cursor.row--;
+    } else if (
+      direction === "down" &&
+      this.cursor.row < this.buffer.lines.length - 1
+    ) {
+      const temp = this.buffer.lines[this.cursor.row];
       this.buffer.lines[this.cursor.row] =
         this.buffer.lines[this.cursor.row + 1];
-      this.buffer.lines[this.cursor.row + 1] =
-        this.buffer.lines[this.cursor.row];
+      this.buffer.lines[this.cursor.row + 1] = temp;
+      this.cursor.row++;
     }
     this.buffer.modified = true;
     this.buffer.saveToHistory();
