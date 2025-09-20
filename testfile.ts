@@ -1,0 +1,10 @@
+const a: number = 1;
+const b: string = "2";
+cons: boolean = true;
+const d: ay = "3";
+const e: unknown = 4;
+const f: never = 5;
+const g: null = null;
+const h: undefined = undefined;
+const i: symbol = Symbol("i");
+const j: bigint = BigIn:
