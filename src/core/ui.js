@@ -149,7 +149,6 @@ class UI {
         const lineNumColor =
           this.selection &&
           this.selection.active &&
-          this.selection.getBounds() &&
           this.isLineInSelection(row)
             ? "{blue-bg}{white-fg}"
             : "{cyan-fg}";
@@ -165,8 +164,7 @@ class UI {
   // Helper method to check if line is in selection
   isLineInSelection(row) {
     if (!this.selection || !this.selection.active) return false;
-    const bounds = this.selection.getBounds();
-    return bounds && row >= bounds.startRow && row <= bounds.endRow;
+    return this.selection.isRowSelected(row);
   }
 
   // Helper method for search highlighting
@@ -245,4 +243,3 @@ class UI {
 }
 
 module.exports = { UI };
-

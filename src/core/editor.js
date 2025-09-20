@@ -110,6 +110,9 @@ class TextEditor {
   insertChar(char) {
     // If there's a selection, delete it first
     if (this.selection.active) {
+      if (this.selection.hasMultipleRanges()) {
+        this.selection.collapseToPrimaryRange();
+      }
       this.selection.delete();
     }
 
@@ -121,6 +124,9 @@ class TextEditor {
   insertNewline() {
     // If there's a selection, delete it first
     if (this.selection.active) {
+      if (this.selection.hasMultipleRanges()) {
+        this.selection.collapseToPrimaryRange();
+      }
       this.selection.delete();
     }
 
@@ -132,6 +138,15 @@ class TextEditor {
   }
 
   deleteChar() {
+    if (this.selection.active) {
+      if (this.selection.hasMultipleRanges()) {
+        this.selection.collapseToPrimaryRange();
+      }
+      if (this.selection.delete()) {
+        this.ui.render();
+        return;
+      }
+    }
     const aboveRowLength =
       this.cursor.row > 0 ? this.buffer.getLine(this.cursor.row - 1).length : 0;
     const moved = this.buffer.deleteChar(this.cursor.row, this.cursor.col);
@@ -147,6 +162,15 @@ class TextEditor {
   }
 
   deleteForward() {
+    if (this.selection.active) {
+      if (this.selection.hasMultipleRanges()) {
+        this.selection.collapseToPrimaryRange();
+      }
+      if (this.selection.delete()) {
+        this.ui.render();
+        return;
+      }
+    }
     const line = this.buffer.getLine(this.cursor.row);
     if (this.cursor.col < line.length) {
       this.cursor.col++;
@@ -224,6 +248,19 @@ class TextEditor {
       // TODO: Implement find next/previous functionality
       this.ui.render();
     }
+  }
+
+  selectNextOccurrence() {
+    const added = this.selection.addNextOccurrence();
+    if (!added) {
+      this.ui.showMessage("No further matches", "warning");
+    } else {
+      const count = this.selection.ranges.length;
+      const message =
+        count > 1 ? `Added occurrence (${count})` : "Word selected";
+      this.ui.showMessage(message, "info");
+    }
+    this.ui.render();
   }
 
   // Help

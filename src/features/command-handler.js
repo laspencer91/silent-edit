@@ -145,9 +145,7 @@ class CommandHandler {
 
     // Select current word
     screen.key(["C-d"], () => {
-      this.editor.selection.selectWord();
-      this.editor.ui.showMessage("Word selected", "info");
-      this.editor.ui.render();
+      this.editor.selectNextOccurrence();
     });
 
     // Copy/Cut/Paste

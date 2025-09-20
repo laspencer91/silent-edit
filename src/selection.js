@@ -1,39 +1,128 @@
 const { debugLog } = require("./core/debug-logger");
 
-// ===== Selection Management =====
+class SelectionRange {
+  constructor(anchorRow, anchorCol, headRow, headCol) {
+    this.anchor = { row: anchorRow, col: anchorCol };
+    this.head = { row: headRow, col: headCol };
+  }
+
+  static fromCursor(cursor) {
+    return new SelectionRange(cursor.row, cursor.col, cursor.row, cursor.col);
+  }
+
+  static fromPositions(anchorRow, anchorCol, headRow, headCol) {
+    return new SelectionRange(anchorRow, anchorCol, headRow, headCol);
+  }
+
+  clone() {
+    return new SelectionRange(
+      this.anchor.row,
+      this.anchor.col,
+      this.head.row,
+      this.head.col
+    );
+  }
+
+  isEmpty() {
+    return (
+      this.anchor.row === this.head.row && this.anchor.col === this.head.col
+    );
+  }
+
+  setAnchor(row, col) {
+    this.anchor.row = row;
+    this.anchor.col = col;
+  }
+
+  setHead(row, col) {
+    this.head.row = row;
+    this.head.col = col;
+  }
+
+  getBounds() {
+    const { anchor, head } = this;
+    if (
+      anchor.row < head.row ||
+      (anchor.row === head.row && anchor.col <= head.col)
+    ) {
+      return {
+        startRow: anchor.row,
+        startCol: anchor.col,
+        endRow: head.row,
+        endCol: head.col,
+      };
+    }
+
+    return {
+      startRow: head.row,
+      startCol: head.col,
+      endRow: anchor.row,
+      endCol: anchor.col,
+    };
+  }
+
+  contains(row, col) {
+    const bounds = this.getBounds();
+    if (!bounds) return false;
+
+    const { startRow, startCol, endRow, endCol } = bounds;
+    if (row < startRow || row > endRow) return false;
+    if (row === startRow && col < startCol) return false;
+    if (row === endRow && col >= endCol) return false;
+    return true;
+  }
+
+  isRowSelected(row) {
+    const bounds = this.getBounds();
+    if (!bounds) return false;
+    return row >= bounds.startRow && row <= bounds.endRow;
+  }
+}
+
 class Selection {
   constructor(buffer, cursor) {
     this.buffer = buffer;
     this.cursor = cursor;
-    this.active = false;
-    this.anchor = { row: 0, col: 0 }; // Starting point of selection
-    this.head = { row: 0, col: 0 }; // Current end point (follows cursor)
+    this.ranges = [];
+    this.primaryIndex = -1;
   }
 
-  // Start a new selection from current cursor position
-  start() {
-    this.active = true;
-    this.anchor.row = this.cursor.row;
-    this.anchor.col = this.cursor.col;
-    this.head.row = this.cursor.row;
-    this.head.col = this.cursor.col;
+  get active() {
+    return this.ranges.length > 0;
   }
 
-  // Update selection as cursor moves
-  update() {
-    if (!this.active) return;
-    this.head.row = this.cursor.row;
-    this.head.col = this.cursor.col;
+  hasMultipleRanges() {
+    return this.ranges.length > 1;
   }
 
-  // Clear the selection
+  get primaryRange() {
+    if (this.primaryIndex < 0 || this.primaryIndex >= this.ranges.length) {
+      return null;
+    }
+    return this.ranges[this.primaryIndex];
+  }
+
+  setPrimaryRange(index) {
+    if (index < 0 || index >= this.ranges.length) return;
+    this.primaryIndex = index;
+  }
+
   clear() {
-    this.active = false;
-    this.anchor = { row: 0, col: 0 };
-    this.head = { row: 0, col: 0 };
+    this.ranges = [];
+    this.primaryIndex = -1;
   }
 
-  // Toggle selection mode
+  start() {
+    const range = SelectionRange.fromCursor(this.cursor);
+    this.setRanges([range]);
+  }
+
+  update() {
+    const primary = this.primaryRange;
+    if (!primary) return;
+    primary.setHead(this.cursor.row, this.cursor.col);
+  }
+
   toggle() {
     if (this.active) {
       this.clear();
@@ -42,77 +131,102 @@ class Selection {
     }
   }
 
-  // Get normalized selection bounds (handles backward selection)
   getBounds() {
-    if (!this.active) return null;
-
-    let startRow, startCol, endRow, endCol;
-
-    if (
-      this.anchor.row < this.head.row ||
-      (this.anchor.row === this.head.row && this.anchor.col <= this.head.col)
-    ) {
-      // Forward selection
-      startRow = this.anchor.row;
-      startCol = this.anchor.col;
-      endRow = this.head.row;
-      endCol = this.head.col;
-    } else {
-      // Backward selection
-      startRow = this.head.row;
-      startCol = this.head.col;
-      endRow = this.anchor.row;
-      endCol = this.anchor.col;
-    }
-
-    return { startRow, startCol, endRow, endCol };
+    const primary = this.primaryRange;
+    return primary ? primary.getBounds() : null;
   }
 
-  // Check if a position is within the selection
+  getAllBounds() {
+    return this.ranges.map((range) => range.getBounds());
+  }
+
   contains(row, col) {
-    if (!this.active) return false;
-
-    const bounds = this.getBounds();
-    if (!bounds) return false;
-
-    const { startRow, startCol, endRow, endCol } = bounds;
-
-    // Check if position is within selection range
-    if (row < startRow || row > endRow) return false;
-    if (row === startRow && col < startCol) return false;
-    if (row === endRow && col >= endCol) return false;
-
-    return true;
+    return this.ranges.some((range) => range.contains(row, col));
   }
 
-  // Get selected text
+  isRowSelected(row) {
+    return this.ranges.some((range) => range.isRowSelected(row));
+  }
+
+  setRanges(ranges, primaryIndex = ranges.length - 1) {
+    this.ranges = ranges.map((range) => range.clone());
+    if (this.ranges.length === 0) {
+      this.primaryIndex = -1;
+      return;
+    }
+    this.sortRanges();
+
+    if (primaryIndex < 0 || primaryIndex >= this.ranges.length) {
+      this.primaryIndex = this.ranges.length - 1;
+    } else {
+      this.primaryIndex = primaryIndex;
+    }
+  }
+
+  sortRanges() {
+    this.ranges.sort((a, b) => {
+      const aBounds = a.getBounds();
+      const bBounds = b.getBounds();
+      if (aBounds.startRow !== bBounds.startRow) {
+        return aBounds.startRow - bBounds.startRow;
+      }
+      return aBounds.startCol - bBounds.startCol;
+    });
+  }
+
+  getOrderedRanges(order = "asc") {
+    const ranges = this.ranges.map((range) => range.clone());
+    ranges.sort((a, b) => {
+      const aBounds = a.getBounds();
+      const bBounds = b.getBounds();
+      if (aBounds.startRow !== bBounds.startRow) {
+        return aBounds.startRow - bBounds.startRow;
+      }
+      return aBounds.startCol - bBounds.startCol;
+    });
+    if (order === "desc") {
+      ranges.reverse();
+    }
+    return ranges;
+  }
+
+  collapseToPrimaryRange() {
+    const primary = this.primaryRange;
+    if (!primary) {
+      this.clear();
+      return;
+    }
+    this.setRanges([primary]);
+  }
+
   getText() {
     if (!this.active) return "";
 
-    const bounds = this.getBounds();
+    const ranges = this.getOrderedRanges("asc");
+    const pieces = ranges.map((range) =>
+      this._getTextForBounds(range.getBounds())
+    );
+    return pieces.join("\n");
+  }
+
+  _getTextForBounds(bounds) {
     if (!bounds) return "";
 
     const { startRow, startCol, endRow, endCol } = bounds;
     let selectedText = "";
 
     if (startRow === endRow) {
-      // Single line selection
       const line = this.buffer.getLine(startRow);
       selectedText = line.substring(startCol, endCol);
     } else {
-      // Multi-line selection
       const lines = [];
-
-      // First line (from startCol to end)
       const firstLine = this.buffer.getLine(startRow);
       lines.push(firstLine.substring(startCol));
 
-      // Middle lines (complete lines)
       for (let row = startRow + 1; row < endRow; row++) {
         lines.push(this.buffer.getLine(row));
       }
 
-      // Last line (from start to endCol)
       const lastLine = this.buffer.getLine(endRow);
       lines.push(lastLine.substring(0, endCol));
 
@@ -122,86 +236,103 @@ class Selection {
     return selectedText;
   }
 
-  // Delete selected text
   delete() {
     if (!this.active) return false;
 
-    const bounds = this.getBounds();
-    if (!bounds) return false;
+    const primaryBounds = this.primaryRange
+      ? this.primaryRange.getBounds()
+      : null;
 
-    const { startRow, startCol, endRow, endCol } = bounds;
+    const ranges = this.getOrderedRanges("asc").filter(
+      (range) => !range.isEmpty()
+    );
 
-    // Save current state for undo
-    this.buffer.saveToHistory();
-
-    if (startRow === endRow) {
-      // Single line deletion
-      const line = this.buffer.getLine(startRow);
-      this.buffer.lines[startRow] =
-        line.substring(0, startCol) + line.substring(endCol);
-    } else {
-      // Multi-line deletion
-      const firstLine = this.buffer.getLine(startRow);
-      const lastLine = this.buffer.getLine(endRow);
-
-      // Combine first and last line parts
-      this.buffer.lines[startRow] =
-        firstLine.substring(0, startCol) + lastLine.substring(endCol);
-
-      // Remove intermediate lines
-      this.buffer.lines.splice(startRow + 1, endRow - startRow);
+    if (ranges.length === 0) {
+      this.clear();
+      return false;
     }
 
-    // Move cursor to selection start
-    this.cursor.row = startRow;
-    this.cursor.col = startCol;
-    this.cursor.clamp();
+    this.buffer.saveToHistory();
 
-    // Clear selection and mark buffer as modified
-    this.clear();
+    for (let i = ranges.length - 1; i >= 0; i--) {
+      const bounds = ranges[i].getBounds();
+      this._deleteBounds(bounds);
+    }
+
     this.buffer.modified = true;
+
+    const targetBounds = primaryBounds || ranges[0].getBounds();
+    this.clear();
+
+    if (targetBounds) {
+      this.cursor.row = targetBounds.startRow;
+      this.cursor.col = targetBounds.startCol;
+      if (typeof this.cursor.clamp === "function") {
+        this.cursor.clamp();
+      }
+    }
 
     return true;
   }
 
-  // Select entire line(s)
-  selectLine(row = this.cursor.row) {
-    this.active = true;
-    this.anchor.row = row;
-    this.anchor.col = 0;
-    this.head.row = row;
-    this.head.col = this.buffer.getLine(row).length;
+  _deleteBounds(bounds) {
+    const { startRow, startCol, endRow, endCol } = bounds;
+
+    if (startRow === endRow) {
+      const line = this.buffer.getLine(startRow);
+      this.buffer.lines[startRow] =
+        line.substring(0, startCol) + line.substring(endCol);
+    } else {
+      const firstLine = this.buffer.getLine(startRow);
+      const lastLine = this.buffer.getLine(endRow);
+
+      this.buffer.lines[startRow] =
+        firstLine.substring(0, startCol) + lastLine.substring(endCol);
+
+      this.buffer.lines.splice(startRow + 1, endRow - startRow);
+    }
   }
 
-  // Select word at cursor
+  selectLine(row = this.cursor.row) {
+    const line = this.buffer.getLine(row);
+    const range = SelectionRange.fromPositions(
+      row,
+      0,
+      row,
+      line.length
+    );
+    this.setRanges([range]);
+    this.cursor.row = range.head.row;
+    this.cursor.col = range.head.col;
+  }
+
   selectWord() {
     const line = this.buffer.getLine(this.cursor.row);
     const col = this.cursor.col;
 
-    // Find word boundaries
+    if (!line) {
+      this.clear();
+      return false;
+    }
+
     let start = col;
     let end = col;
 
-    // If we're on a word character, expand to word boundaries
     if (col < line.length && /\w/.test(line[col])) {
-      // Find start of word
       while (start > 0 && /\w/.test(line[start - 1])) {
         start--;
       }
-      // Find end of word
       while (end < line.length && /\w/.test(line[end])) {
         end++;
       }
     } else {
-      // If not on a word, try to find nearest word
-      // Look backward
       while (start > 0 && !/\w/.test(line[start - 1])) {
         start--;
       }
       while (start > 0 && /\w/.test(line[start - 1])) {
         start--;
       }
-      // Look forward
+
       while (end < line.length && !/\w/.test(line[end])) {
         end++;
       }
@@ -211,96 +342,158 @@ class Selection {
     }
 
     if (start < end) {
-      this.active = true;
-      this.anchor.row = this.cursor.row;
-      this.anchor.col = start;
-      this.head.row = this.cursor.row;
-      this.head.col = end;
-
-      // Move cursor to end of selection
+      const range = SelectionRange.fromPositions(
+        this.cursor.row,
+        start,
+        this.cursor.row,
+        end
+      );
+      this.setRanges([range]);
       this.cursor.col = end;
+      return true;
     }
+
+    this.clear();
+    return false;
   }
 
-  // Select all text in buffer
   selectAll() {
-    this.active = true;
-    this.anchor.row = 0;
-    this.anchor.col = 0;
-
     const lastRow = Math.max(0, this.buffer.getLineCount() - 1);
-    this.head.row = lastRow;
-    this.head.col = this.buffer.getLine(lastRow).length;
-
-    // Move cursor to end
-    this.cursor.row = this.head.row;
-    this.cursor.col = this.head.col;
+    const lastCol = this.buffer.getLine(lastRow).length;
+    const range = SelectionRange.fromPositions(0, 0, lastRow, lastCol);
+    this.setRanges([range]);
+    this.cursor.row = range.head.row;
+    this.cursor.col = range.head.col;
   }
 
-  // Extend selection to include movement
   extendTo(row, col) {
-    if (!this.active) {
+    const primary = this.primaryRange;
+    if (!primary) {
       this.start();
+      return;
     }
-    this.head.row = row;
-    this.head.col = col;
+    primary.setHead(row, col);
   }
-}
 
-// ===== Integration with UI =====
-// Add this method to your UI class to render selections
-class UISelectionExtension {
-  // Add this method to your existing UI class
-  renderTextWithSelection(selection) {
-    const textHeight = this.textArea.height;
-    const textWidth = this.textArea.width;
-    const lines = [];
-
-    for (let i = 0; i < textHeight; i++) {
-      const row = this.viewport.top + i;
-      if (row < this.buffer.getLineCount()) {
-        let line = this.buffer.getLine(row);
-        let displayLine = "";
-
-        // Build the display line with selection highlighting
-        for (let col = 0; col < line.length; col++) {
-          const char = line[col];
-          const isSelected = selection.contains(row, col);
-
-          if (isSelected) {
-            // Highlight selected text
-            displayLine += `{blue-bg}{white-fg}${char}{/}`;
-          } else {
-            displayLine += char;
-          }
-        }
-
-        // Apply horizontal viewport
-        if (this.viewport.left > 0) {
-          // This gets more complex with tags, you might need to adjust
-          displayLine = displayLine.slice(this.viewport.left);
-        }
-
-        // Add line numbers
-        const lineNum = String(row + 1).padStart(4, " ");
-        const lineNumColor = selection.contains(row, 0)
-          ? "{blue-bg}{white-fg}"
-          : "{cyan-fg}";
-        lines.push(`${lineNumColor}${lineNum}{/} ${displayLine}`);
-      } else {
-        lines.push("{blue-fg}~{/}");
+  addRange(range, makePrimary = true) {
+    const cloned = range.clone();
+    this.ranges.push(cloned);
+    this.sortRanges();
+    if (makePrimary) {
+      this.primaryIndex = this.ranges.indexOf(cloned);
+      if (this.primaryIndex === -1) {
+        this.primaryIndex = this.ranges.length - 1;
       }
     }
+  }
 
-    this.textArea.setContent(lines.join("\n"));
+  addNextOccurrence(options = {}) {
+    const { loop = false } = options;
+
+    if (!this.active) {
+      const selected = this.selectWord();
+      return selected;
+    }
+
+    const primary = this.primaryRange;
+    if (!primary) return false;
+
+    const primaryBounds = primary.getBounds();
+    const searchText = this._getTextForBounds(primaryBounds);
+    if (!searchText) return false;
+
+    const bufferLineCount = this.buffer.getLineCount();
+    let row = primaryBounds.endRow;
+    let col = primaryBounds.endCol;
+
+    const visitKey = (r, c) => `${r}:${c}`;
+    const visited = new Set(
+      this.ranges.map((range) => {
+        const bounds = range.getBounds();
+        return visitKey(bounds.startRow, bounds.startCol);
+      })
+    );
+
+    const originalKey = visitKey(primaryBounds.startRow, primaryBounds.startCol);
+
+    const searchForward = () => {
+      while (row < bufferLineCount) {
+        const line = this.buffer.getLine(row);
+        const fromIndex = col;
+        const index = line.indexOf(searchText, fromIndex);
+        if (index !== -1) {
+          const key = visitKey(row, index);
+          if (!visited.has(key)) {
+            const candidate = SelectionRange.fromPositions(
+              row,
+              index,
+              row,
+              index + searchText.length
+            );
+            const cloned = candidate.clone();
+            this.ranges.push(cloned);
+            this.sortRanges();
+            this.primaryIndex = this.ranges.indexOf(cloned);
+            this.cursor.row = cloned.head.row;
+            this.cursor.col = cloned.head.col;
+            if (typeof this.cursor.clamp === "function") {
+              this.cursor.clamp();
+            }
+            return true;
+          }
+          col = index + Math.max(1, searchText.length);
+        } else {
+          row++;
+          col = 0;
+        }
+      }
+      return false;
+    };
+
+    if (searchForward()) return true;
+    if (!loop) return false;
+
+    row = 0;
+    col = 0;
+    while (row < bufferLineCount) {
+      const line = this.buffer.getLine(row);
+      const index = line.indexOf(searchText, col);
+      if (index === -1) {
+        row++;
+        col = 0;
+        continue;
+      }
+      const key = visitKey(row, index);
+      if (key === originalKey) break;
+      if (!visited.has(key)) {
+        const candidate = SelectionRange.fromPositions(
+          row,
+          index,
+          row,
+          index + searchText.length
+        );
+        const cloned = candidate.clone();
+        this.ranges.push(cloned);
+        this.sortRanges();
+        this.primaryIndex = this.ranges.indexOf(cloned);
+        this.cursor.row = cloned.head.row;
+        this.cursor.col = cloned.head.col;
+        if (typeof this.cursor.clamp === "function") {
+          this.cursor.clamp();
+        }
+        return true;
+      }
+      col = index + Math.max(1, searchText.length);
+    }
+
+    return false;
   }
 }
 
-// ===== Clipboard Operations =====
 class Clipboard {
   constructor() {
     this.content = "";
-    this.isLinewise = false; // Track if content is full lines
+    this.isLinewise = false;
   }
 
   copy(text, isLinewise = false) {
@@ -329,36 +522,25 @@ class Clipboard {
     buffer.saveToHistory();
 
     if (this.isLinewise) {
-      // Paste as new line(s)
       const lines = this.content.split("\n");
-
-      // Insert after current line
       for (let i = 0; i < lines.length; i++) {
         buffer.lines.splice(cursor.row + i + 1, 0, lines[i]);
       }
-
-      // Move cursor to start of first pasted line
       cursor.row++;
       cursor.col = 0;
     } else {
-      // Paste at cursor position
       const line = buffer.getLine(cursor.row);
       const before = line.substring(0, cursor.col);
       const after = line.substring(cursor.col);
 
       if (this.content.includes("\n")) {
-        // Multi-line paste
         const pasteLines = this.content.split("\n");
-
-        // First line
         buffer.lines[cursor.row] = before + pasteLines[0];
 
-        // Middle lines
         for (let i = 1; i < pasteLines.length - 1; i++) {
           buffer.lines.splice(cursor.row + i, 0, pasteLines[i]);
         }
 
-        // Last line
         const lastIndex = pasteLines.length - 1;
         buffer.lines.splice(
           cursor.row + lastIndex,
@@ -366,11 +548,9 @@ class Clipboard {
           pasteLines[lastIndex] + after
         );
 
-        // Move cursor to end of pasted content
         cursor.row += lastIndex;
         cursor.col = pasteLines[lastIndex].length;
       } else {
-        // Single line paste
         buffer.lines[cursor.row] = before + this.content + after;
         cursor.col += this.content.length;
       }
@@ -386,6 +566,4 @@ class Clipboard {
   }
 }
 
-// Note: Command handler integration is now handled in src/features/command-handler.js
-
-module.exports = { Selection, Clipboard };
+module.exports = { Selection, Clipboard, SelectionRange };
