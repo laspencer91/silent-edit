@@ -1,10 +1,18 @@
+const path = require("path");
 const blessed = require("blessed");
 const { Buffer } = require("./buffer");
 const { Cursor } = require("./cursor");
 const { UI } = require("./ui");
+const { OverlayHost } = require("./overlay-host");
 const { Selection } = require("../selection");
 const { Clipboard } = require("../features/clipboard");
 const { CommandHandler } = require("../features/command-handler");
+const {
+  FileSearchOverlay,
+} = require("../features/file-search/file-search-overlay");
+const {
+  ConfirmationOverlay,
+} = require("../features/overlays/confirmation-overlay");
 
 // ===== Main Editor Class =====
 class TextEditor {
@@ -18,6 +26,7 @@ class TextEditor {
       output: process.stdout,
     });
 
+    this.workspaceRoot = process.cwd();
     this.buffer = new Buffer();
     this.cursor = new Cursor(this.buffer);
 
@@ -25,8 +34,98 @@ class TextEditor {
     this.selection = new Selection(this.buffer, this.cursor);
     this.clipboard = new Clipboard();
 
-    this.ui = new UI(this.screen, this.buffer, this.cursor, this.selection);
+    this.overlayHost = new OverlayHost(this.screen);
+    this.fileSearchOverlay = new FileSearchOverlay(this.screen, {
+      root: this.workspaceRoot,
+      onCancel: () => this.hideOverlay(),
+      onOpen: (meta) => this.openFromSearch(meta),
+      onOpenSplit: (meta) => this.openFromSearch(meta),
+    });
+
+    this.ui = new UI(
+      this.screen,
+      this.buffer,
+      this.cursor,
+      this.selection,
+      this.overlayHost
+    );
     this.commands = new CommandHandler(this);
+
+    this.ui.render();
+  }
+
+  isOverlayActive() {
+    return this.overlayHost.isActive();
+  }
+
+  hideOverlay() {
+    if (this.overlayHost.isActive()) {
+      this.overlayHost.hide();
+      this.ui.render();
+    }
+  }
+
+  showFileSearch() {
+    if (!this.overlayHost.isActive()) {
+      this.overlayHost.show(this.fileSearchOverlay);
+    }
+  }
+
+  setWorkspaceRoot(root) {
+    if (!root) return;
+    const resolved = path.resolve(root);
+    if (resolved === this.workspaceRoot) return;
+    this.workspaceRoot = resolved;
+    if (this.fileSearchOverlay && this.fileSearchOverlay.setRoot) {
+      this.fileSearchOverlay.setRoot(this.workspaceRoot);
+    }
+  }
+
+  resolveWorkspacePath(target) {
+    if (!target) return null;
+    if (path.isAbsolute(target)) return target;
+    const normalised = target.replace(/\\/g, "/");
+    return path.join(this.workspaceRoot, ...normalised.split("/"));
+  }
+
+  async openFromSearch(meta) {
+    if (!meta) return;
+
+    const candidate =
+      meta.absolutePath ||
+      this.resolveWorkspacePath(meta.relativePathPosix || meta.relativePath);
+
+    if (!candidate) {
+      this.ui.showMessage("Unable to resolve file path", "error");
+      return;
+    }
+
+    // Check for unsaved changes before opening new file
+    if (this.buffer.modified) {
+      const action = await this.confirmDiscard(this.buffer.filename);
+      if (action === "cancel") {
+        return; // User cancelled, stay in current file
+      } else if (action === "save") {
+        await this.save();
+      }
+      // If action === "discard", continue without saving
+    }
+
+    // Dismiss file search overlay once we're committed to switching files
+    if (this.overlayHost.isActive()) {
+      this.hideOverlay();
+    }
+
+    const success = await this.buffer.loadFile(candidate);
+    if (success) {
+      this.cursor.moveToStart();
+      this.ui.showMessage(
+        `Opened ${meta.relativePathPosix || path.basename(candidate)}`,
+        "success"
+      );
+    } else {
+      this.ui.showMessage(`Failed to open ${candidate}`, "error");
+    }
 
     this.ui.render();
   }
@@ -190,6 +289,29 @@ class TextEditor {
     }
   }
 
+  // Confirmation dialog for unsaved changes
+  async confirmDiscard(filename) {
+    const displayName = filename ? path.basename(filename) : "Untitled";
+
+    const confirmationOverlay = new ConfirmationOverlay(this.screen, {
+      message: "You have unsaved changes.",
+      details: displayName,
+      choices: [
+        { key: "y", label: "Save & Continue", action: "save" },
+        { key: "n", label: "Discard Changes", action: "discard" },
+        { key: "c", label: "Cancel", action: "cancel" },
+      ],
+    });
+
+    try {
+      const result = await this.overlayHost.show(confirmationOverlay);
+      return result;
+    } catch (err) {
+      // If overlay was cancelled or errored, default to cancel
+      return "cancel";
+    }
+  }
+
   // File operations
   async save() {
     if (!this.buffer.filename) {
@@ -198,7 +320,7 @@ class TextEditor {
         this.ui.showMessage("Save cancelled", "warning");
         return;
       }
-      this.buffer.filename = filename;
+      this.buffer.filename = this.resolveWorkspacePath(filename) || filename;
     }
 
     const success = await this.buffer.saveFile();
@@ -211,18 +333,30 @@ class TextEditor {
   }
 
   async open() {
+    // Check for unsaved changes before opening new file
+    if (this.buffer.modified) {
+      const action = await this.confirmDiscard(this.buffer.filename);
+      if (action === "cancel") {
+        return; // User cancelled, stay in current file
+      } else if (action === "save") {
+        await this.save();
+      }
+      // If action === "discard", continue without saving
+    }
+
     const filename = await this.ui.promptInput("Open file: ");
     if (!filename) {
       this.ui.showMessage("Open cancelled", "warning");
       return;
     }
 
-    const success = await this.buffer.loadFile(filename);
+    const target = this.resolveWorkspacePath(filename) || filename;
+    const success = await this.buffer.loadFile(target);
     if (success) {
       this.cursor.moveToStart();
-      this.ui.showMessage(`Opened ${filename}`, "success");
+      this.ui.showMessage(`Opened ${target}`, "success");
     } else {
-      this.ui.showMessage(`Failed to open ${filename}`, "error");
+      this.ui.showMessage(`Failed to open ${target}`, "error");
     }
     this.ui.render();
   }
@@ -308,6 +442,10 @@ Press any key to continue...`;
 
   // Exit handling
   handleEscape() {
+    if (this.overlayHost.isActive()) {
+      this.hideOverlay();
+      return;
+    }
     if (this.selection.active) {
       this.selection.clear();
       this.ui.showMessage("Selection cleared", "info");
@@ -318,16 +456,14 @@ Press any key to continue...`;
 
   async quit() {
     if (this.buffer.modified) {
-      const response = await this.ui.promptInput(
-        "Unsaved changes. Save before quit? (y/n/c): "
-      );
-      if (response === "y") {
+      const action = await this.confirmDiscard(this.buffer.filename);
+      if (action === "save") {
         await this.save();
         process.exit(0);
-      } else if (response === "n") {
+      } else if (action === "discard") {
         process.exit(0);
       }
-      // 'c' or anything else cancels quit
+      // 'cancel' or anything else cancels quit
     } else {
       process.exit(0);
     }
@@ -337,7 +473,9 @@ Press any key to continue...`;
   run() {
     const args = process.argv.slice(2);
     if (args.length > 0) {
-      this.buffer.loadFile(args[0]).then(() => {
+      const target = path.resolve(args[0]);
+      this.setWorkspaceRoot(path.dirname(target));
+      this.buffer.loadFile(target).then(() => {
         this.ui.render();
       });
     }

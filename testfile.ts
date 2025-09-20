@@ -1,9 +1,9 @@
 const a: number = 1;
-const b: string = "2";
+tring b: string = "2";
 cons: boolean = true;
-const d: ay = "3";
-const e: unknown = 4;
-const f: never = 5;
+string d: ay = "3";
+string e: unknown = 4;
+string f: never = 5;
 const g: null = null;
 const h: undefined = undefined;
 const i: symbol = Symbol("i");

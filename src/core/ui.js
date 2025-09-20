@@ -2,11 +2,12 @@ const blessed = require("blessed");
 
 // ===== UI Management =====
 class UI {
-  constructor(screen, buffer, cursor, selection) {
+  constructor(screen, buffer, cursor, selection, overlayHost) {
     this.screen = screen;
     this.buffer = buffer;
     this.cursor = cursor;
     this.selection = selection;
+    this.overlayHost = overlayHost;
     this.viewport = { top: 0, left: 0 };
     this.searchTerm = "";
 
@@ -67,8 +68,10 @@ class UI {
     this.renderStatusBar();
     this.renderCursor();
 
-    // Ensure text area is focused for input
-    this.textArea.focus();
+    // Keep focus on the main text area unless an overlay owns focus
+    if (!this.overlayHost || !this.overlayHost.isActive()) {
+      this.textArea.focus();
+    }
     this.screen.render();
   }
 
