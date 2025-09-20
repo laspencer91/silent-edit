@@ -108,12 +108,13 @@ class TextEditor {
 
   // Text editing
   insertChar(char) {
-    // If there's a selection, delete it first
     if (this.selection.active) {
-      if (this.selection.hasMultipleRanges()) {
-        this.selection.collapseToPrimaryRange();
+      const replaced = this.selection.replaceRanges(() => char);
+      if (replaced) {
+        this.cursor.preferredCol = this.cursor.col;
+        this.ui.render();
+        return;
       }
-      this.selection.delete();
     }
 
     this.buffer.insertChar(this.cursor.row, this.cursor.col, char);
@@ -122,12 +123,13 @@ class TextEditor {
   }
 
   insertNewline() {
-    // If there's a selection, delete it first
     if (this.selection.active) {
-      if (this.selection.hasMultipleRanges()) {
-        this.selection.collapseToPrimaryRange();
+      const replaced = this.selection.replaceRanges(() => "\n");
+      if (replaced) {
+        this.cursor.preferredCol = this.cursor.col;
+        this.ui.render();
+        return;
       }
-      this.selection.delete();
     }
 
     this.buffer.insertLine(this.cursor.row, this.cursor.col);
@@ -139,10 +141,11 @@ class TextEditor {
 
   deleteChar() {
     if (this.selection.active) {
-      if (this.selection.hasMultipleRanges()) {
-        this.selection.collapseToPrimaryRange();
-      }
-      if (this.selection.delete()) {
+      const handled = this.selection.hasContentSelection()
+        ? this.selection.replaceRanges(() => "")
+        : this.selection.deleteBackward();
+      if (handled) {
+        this.cursor.preferredCol = this.cursor.col;
         this.ui.render();
         return;
       }
@@ -163,10 +166,11 @@ class TextEditor {
 
   deleteForward() {
     if (this.selection.active) {
-      if (this.selection.hasMultipleRanges()) {
-        this.selection.collapseToPrimaryRange();
-      }
-      if (this.selection.delete()) {
+      const handled = this.selection.hasContentSelection()
+        ? this.selection.replaceRanges(() => "")
+        : this.selection.deleteForward();
+      if (handled) {
+        this.cursor.preferredCol = this.cursor.col;
         this.ui.render();
         return;
       }

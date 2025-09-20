@@ -73,6 +73,7 @@ class SelectionRange {
   }
 
   isRowSelected(row) {
+    if (this.isEmpty()) return false;
     const bounds = this.getBounds();
     if (!bounds) return false;
     return row >= bounds.startRow && row <= bounds.endRow;
@@ -93,6 +94,10 @@ class Selection {
 
   hasMultipleRanges() {
     return this.ranges.length > 1;
+  }
+
+  hasContentSelection() {
+    return this.ranges.some((range) => !range.isEmpty());
   }
 
   get primaryRange() {
@@ -197,6 +202,12 @@ class Selection {
       return;
     }
     this.setRanges([primary]);
+  }
+
+  ensurePrimaryRange() {
+    if (this.active) return;
+    const range = SelectionRange.fromCursor(this.cursor);
+    this.setRanges([range]);
   }
 
   getText() {
@@ -373,6 +384,264 @@ class Selection {
       return;
     }
     primary.setHead(row, col);
+  }
+
+  replaceRanges(getReplacement) {
+    if (!this.active) return false;
+
+    const ordered = this.getOrderedRanges("asc");
+    if (ordered.length === 0) {
+      return false;
+    }
+
+    const primaryBounds = this.primaryRange
+      ? this.primaryRange.getBounds()
+      : null;
+    const primaryKey = primaryBounds ? this._boundsKey(primaryBounds) : null;
+    const orderedKeys = ordered.map((range) =>
+      this._boundsKey(range.getBounds())
+    );
+
+    const actions = ordered.map((range, index) => {
+      const originalBounds = range.getBounds();
+      const result = getReplacement(range, originalBounds, index);
+
+      if (result === null || result === undefined) {
+        return {
+          perform: false,
+          bounds: originalBounds,
+          text: "",
+        };
+      }
+
+      let text = "";
+      let targetBounds = originalBounds;
+
+      if (typeof result === "object" && result !== null && !Array.isArray(result)) {
+        text = result.text !== undefined ? String(result.text) : "";
+        targetBounds = result.bounds ? result.bounds : originalBounds;
+      } else {
+        text = String(result);
+      }
+
+      const normalizedBounds = this._normalizeBounds(targetBounds);
+      const isEmptyBounds = this._isEmptyBounds(normalizedBounds);
+      const willModify = !isEmptyBounds || text.length > 0;
+
+      return {
+        perform: willModify,
+        bounds: normalizedBounds,
+        text,
+      };
+    });
+
+    const shouldModify = actions.some((action) => action.perform);
+    if (!shouldModify) {
+      return false;
+    }
+
+    this.buffer.saveToHistory();
+
+    for (let i = actions.length - 1; i >= 0; i--) {
+      const action = actions[i];
+      if (!action.perform) {
+        action.newPosition = {
+          row: action.bounds.startRow,
+          col: action.bounds.startCol,
+        };
+        continue;
+      }
+
+      if (!this._isEmptyBounds(action.bounds)) {
+        this._deleteBounds(action.bounds);
+      }
+
+      action.newPosition = this._insertTextAt(
+        action.bounds.startRow,
+        action.bounds.startCol,
+        action.text
+      );
+    }
+
+    this.buffer.modified = true;
+
+    const newRanges = actions.map((action) =>
+      SelectionRange.fromPositions(
+        action.newPosition.row,
+        action.newPosition.col,
+        action.newPosition.row,
+        action.newPosition.col
+      )
+    );
+
+    let primaryIndex = newRanges.length - 1;
+    if (primaryKey) {
+      const foundIndex = orderedKeys.findIndex((key) => key === primaryKey);
+      if (foundIndex !== -1) {
+        primaryIndex = foundIndex;
+      }
+    }
+
+    this.setRanges(newRanges, primaryIndex);
+
+    const primary = this.primaryRange;
+    if (primary) {
+      this.cursor.row = primary.head.row;
+      this.cursor.col = primary.head.col;
+      if (typeof this.cursor.clamp === "function") {
+        this.cursor.clamp();
+      }
+    }
+
+    return true;
+  }
+
+  _normalizeBounds(bounds) {
+    if (!bounds) return null;
+    const { startRow, startCol, endRow, endCol } = bounds;
+
+    if (
+      startRow < endRow ||
+      (startRow === endRow && startCol <= endCol)
+    ) {
+      return { startRow, startCol, endRow, endCol };
+    }
+
+    return {
+      startRow: endRow,
+      startCol: endCol,
+      endRow: startRow,
+      endCol: startCol,
+    };
+  }
+
+  _isEmptyBounds(bounds) {
+    if (!bounds) return true;
+    return (
+      bounds.startRow === bounds.endRow && bounds.startCol === bounds.endCol
+    );
+  }
+
+  _boundsKey(bounds) {
+    if (!bounds) return null;
+    return `${bounds.startRow}:${bounds.startCol}:${bounds.endRow}:${bounds.endCol}`;
+  }
+
+  _insertTextAt(row, col, text) {
+    if (text === undefined || text === null || text.length === 0) {
+      return { row, col };
+    }
+
+    while (this.buffer.lines.length <= row) {
+      this.buffer.lines.push("");
+    }
+
+    const originalLine = this.buffer.lines[row] || "";
+    const before = originalLine.slice(0, col);
+    const after = originalLine.slice(col);
+    const parts = String(text).split("\n");
+
+    if (parts.length === 1) {
+      this.buffer.lines[row] = before + parts[0] + after;
+      return { row, col: col + parts[0].length };
+    }
+
+    this.buffer.lines[row] = before + parts[0];
+    let insertIndex = row + 1;
+
+    for (let i = 1; i < parts.length; i++) {
+      this.buffer.lines.splice(insertIndex, 0, parts[i]);
+      insertIndex++;
+    }
+
+    const lastRow = row + parts.length - 1;
+    this.buffer.lines[lastRow] += after;
+
+    return {
+      row: lastRow,
+      col: parts[parts.length - 1].length,
+    };
+  }
+
+  deleteBackward() {
+    if (!this.active) return false;
+
+    return this.replaceRanges((range, bounds) => {
+      if (!range.isEmpty()) {
+        return { text: "", bounds };
+      }
+
+      const startRow = bounds.startRow;
+      const startCol = bounds.startCol;
+
+      if (startCol > 0) {
+        return {
+          text: "",
+          bounds: {
+            startRow,
+            startCol: startCol - 1,
+            endRow: startRow,
+            endCol: startCol,
+          },
+        };
+      }
+
+      if (startRow === 0) {
+        return null;
+      }
+
+      const prevLineLength = this.buffer.getLine(startRow - 1).length;
+      return {
+        text: "",
+        bounds: {
+          startRow: startRow - 1,
+          startCol: prevLineLength,
+          endRow: startRow,
+          endCol: startCol,
+        },
+      };
+    });
+  }
+
+  deleteForward() {
+    if (!this.active) return false;
+
+    return this.replaceRanges((range, bounds) => {
+      if (!range.isEmpty()) {
+        return { text: "", bounds };
+      }
+
+      const startRow = bounds.startRow;
+      const startCol = bounds.startCol;
+      const line = this.buffer.getLine(startRow);
+
+      if (startCol < line.length) {
+        return {
+          text: "",
+          bounds: {
+            startRow,
+            startCol,
+            endRow: startRow,
+            endCol: startCol + 1,
+          },
+        };
+      }
+
+      const lastRowIndex = this.buffer.getLineCount() - 1;
+      if (startRow >= lastRowIndex) {
+        return null;
+      }
+
+      return {
+        text: "",
+        bounds: {
+          startRow,
+          startCol,
+          endRow: startRow + 1,
+          endCol: 0,
+        },
+      };
+    });
   }
 
   addRange(range, makePrimary = true) {

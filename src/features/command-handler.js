@@ -150,7 +150,10 @@ class CommandHandler {
 
     // Copy/Cut/Paste
     screen.key(["C-c"], () => {
-      if (this.editor.selection.active) {
+      if (
+        this.editor.selection.active &&
+        this.editor.selection.hasContentSelection()
+      ) {
         const text = this.editor.selection.getText();
         this.editor.clipboard.copy(text);
         this.editor.selection.clear();
@@ -160,7 +163,10 @@ class CommandHandler {
     });
 
     screen.key(["C-x"], () => {
-      if (this.editor.selection.active) {
+      if (
+        this.editor.selection.active &&
+        this.editor.selection.hasContentSelection()
+      ) {
         this.editor.clipboard.cut(
           this.editor.selection,
           this.editor.buffer,
@@ -180,14 +186,7 @@ class CommandHandler {
 
     // Delete selection
     screen.key(["delete"], () => {
-      if (this.editor.selection.active) {
-        this.editor.selection.delete();
-        this.editor.ui.showMessage("Selection deleted", "info");
-        this.editor.ui.render();
-      } else {
-        // Normal delete behavior
-        this.editor.deleteForward();
-      }
+      this.editor.deleteForward();
     });
   }
 }
